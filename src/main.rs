@@ -331,7 +331,7 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.version_from
             };
             let version_to = if colored {
-                &pkg.version_to.bright_white().to_string()
+                &pkg.version_to.cyan().to_string()
             } else {
                 &pkg.version_to
             };
@@ -355,7 +355,7 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.name
             };
             let version_from = if colored {
-                &pkg.version_from.bright_white().to_string()
+                &pkg.version_from.cyan().to_string()
             } else {
                 &pkg.version_from
             };
@@ -384,7 +384,7 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.name
             };
             let version = if colored {
-                &pkg.version.bright_white().to_string()
+                &pkg.version.white().to_string()
             } else {
                 &pkg.version
             };
@@ -405,7 +405,7 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.name
             };
             let version = if colored {
-                &pkg.version.bright_white().to_string()
+                &pkg.version.white().to_string()
             } else {
                 &pkg.version
             };
@@ -585,12 +585,12 @@ fn print_file_changes(file_changes: &FileChanges, colored: bool) {
                 &f.path
             };
             let size_from = if colored {
-                f.size_from.to_string().bright_white().to_string()
+                f.size_from.to_string().white().to_string()
             } else {
                 f.size_from.to_string()
             };
             let size_to = if colored {
-                f.size_to.to_string().white().to_string()
+                f.size_to.to_string().cyan().to_string()
             } else {
                 f.size_to.to_string()
             };
