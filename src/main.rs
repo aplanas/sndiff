@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use semver::Version;
 use serde::Serialize;
-// use similar::DiffableStr;
+use similar::TextDiff;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -86,6 +86,7 @@ fn check_directory_exists_and_readable(dir_path: &str) -> Result<(), String> {
 struct Package {
     name: String,
     version: String,
+    #[serde(skip_serializing)]
     changelog: Option<String>,
 }
 
@@ -105,25 +106,33 @@ struct PackageChanges {
     removed: Vec<Package>,
 }
 
-fn get_packages_from(snapshot: Option<u32>) -> Result<Vec<Package>, String> {
+fn get_packages_from(snapshot: Option<u32>, changelog: bool) -> Result<Vec<Package>, String> {
     let dbpath = if let Some(id) = snapshot {
         format!("/.snapshots/{id}/snapshot/usr/lib/sysimage/rpm")
     } else {
         "/usr/lib/sysimage/rpm".to_string()
     };
 
+    println!("Reading packages from {dbpath} ...");
+
+    let query_format = if changelog {
+        "%{NAME}\n%{VERSION}-%{RELEASE}\n---BEGIN CHANGELOG\n[* %{CHANGELOGTIME:date} %{CHANGELOGNAME}\n%{CHANGELOGTEXT}\n\n]---END CHANGELOG\n"
+    } else {
+        "%{NAME}\n%{VERSION}-%{RELEASE}\n---BEGIN CHANGELOG\n---END CHANGELOG\n"
+    };
+
     let output = Command::new("rpm")
         .arg("-qa")
         .arg("--queryformat")
-        .arg("%{NAME} %{VERSION}-%{RELEASE}\n")
+        .arg(query_format)
         .arg("--dbpath")
-        .arg(dbpath)
+        .arg(&dbpath)
         .output()
         .map_err(|e| format!("Failed to execute rpm: {}", e))?;
 
     if !output.status.success() {
-        println!("stdout: {}", str::from_utf8(&output.stdout).unwrap());
-        println!("stderr: {}", str::from_utf8(&output.stderr).unwrap());
+        eprintln!("stdout: {}", str::from_utf8(&output.stdout).unwrap());
+        eprintln!("stderr: {}", str::from_utf8(&output.stderr).unwrap());
         return Err(format!("rpm failed with status: {}", output.status));
     }
 
@@ -131,20 +140,36 @@ fn get_packages_from(snapshot: Option<u32>) -> Result<Vec<Package>, String> {
         str::from_utf8(&output.stdout).map_err(|e| format!("Invalid UTF-8 output: {}", e))?;
 
     let mut packages: Vec<Package> = Vec::new();
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.splitn(2, ' ').collect();
-        if parts.len() == 2 {
-            let name = parts[0].to_string();
-            let version = parts[1].to_string();
-            let changelog = None;
-            packages.push(Package {
-                name,
-                version,
-                changelog,
-            });
-        } else {
-            eprintln!("Warning: Unexpected line format: {}", line);
+    let mut lines = stdout.lines();
+    while let Some(line) = lines.next() {
+        let name = line.to_string();
+        let version = lines
+            .next()
+            .expect("Missing version from rpm output")
+            .to_string();
+        let mark = lines.next().expect("Missing mark from rpm output");
+        if mark != "---BEGIN CHANGELOG" {
+            return Err("rpm information cannot be parsed".to_string());
         }
+
+        let mut changelog_lines = String::new();
+        for line in lines.by_ref() {
+            if line == "---END CHANGELOG" {
+                break;
+            }
+            changelog_lines.push_str(line);
+            changelog_lines.push('\n');
+        }
+
+        packages.push(Package {
+            name,
+            version,
+            changelog: if changelog {
+                Some(changelog_lines)
+            } else {
+                None
+            },
+        });
     }
 
     Ok(packages)
@@ -169,9 +194,14 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
         .collect();
 
     for (name, (new_version, new_changelog)) in new_map.iter() {
-        if let Some((old_version, _old_changelog)) = old_map.get(name) {
+        if let Some((old_version, old_changelog)) = old_map.get(name) {
             let parsed_old_version = Version::parse(old_version);
             let parsed_new_version = Version::parse(new_version);
+
+            let mut changelog_diff = None;
+            if let (Some(old), Some(new)) = (old_changelog, new_changelog) {
+                changelog_diff = Some(TextDiff::from_lines(old, new).unified_diff().to_string());
+            }
 
             match (parsed_old_version, parsed_new_version) {
                 (Ok(old), Ok(new)) => match new.cmp(&old) {
@@ -180,7 +210,7 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
                             name: name.to_string(),
                             version_from: old_version.to_string(),
                             version_to: new_version.to_string(),
-                            changelog_diff: (**new_changelog).clone(),
+                            changelog_diff,
                         });
                     }
                     Ordering::Less => {
@@ -188,7 +218,7 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
                             name: name.to_string(),
                             version_from: old_version.to_string(),
                             version_to: new_version.to_string(),
-                            changelog_diff: (**new_changelog).clone(),
+                            changelog_diff,
                         });
                     }
                     Ordering::Equal => (),
@@ -199,7 +229,7 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
                         name: name.to_string(),
                         version_from: old_version.to_string(),
                         version_to: new_version.to_string(),
-                        changelog_diff: (**new_changelog).clone(),
+                        changelog_diff,
                     });
                 }
                 (Ok(_), Err(_)) => {
@@ -208,7 +238,7 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
                         name: name.to_string(),
                         version_from: old_version.to_string(),
                         version_to: new_version.to_string(),
-                        changelog_diff: (**new_changelog).clone(),
+                        changelog_diff,
                     });
                 }
                 (Err(_), Err(_)) => {
@@ -217,7 +247,7 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
                             name: name.to_string(),
                             version_from: old_version.to_string(),
                             version_to: new_version.to_string(),
-                            changelog_diff: (**new_changelog).clone(),
+                            changelog_diff,
                         });
                     }
                 }
@@ -251,6 +281,38 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
     changes
 }
 
+fn print_diff(diff: &str, max_lines: usize, colored: bool) {
+    let mut reached_max_lines = false;
+
+    for (lines, line) in diff.lines().enumerate() {
+        if lines >= max_lines {
+            reached_max_lines = true;
+            break;
+        }
+
+        if line.starts_with('+') {
+            let line = if colored {
+                &line.green().to_string()
+            } else {
+                line
+            };
+            println!("    {line}");
+        } else if line.starts_with('-') {
+            let line = if colored {
+                &line.red().to_string()
+            } else {
+                line
+            };
+            println!("    {line}");
+        } else {
+            println!("    {line}");
+        }
+    }
+    if reached_max_lines {
+        println!("    ... cont (lines {max_lines} of {})", diff.len());
+    }
+}
+
 fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
     if !package_changes.updated.is_empty() {
         println!(
@@ -274,6 +336,9 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.version_to
             };
             println!("  {name} ({version_from} -> {version_to})");
+            if let Some(ref changelog_diff) = pkg.changelog_diff {
+                print_diff(changelog_diff, 10, colored);
+            }
         }
         println!();
     }
@@ -300,6 +365,9 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.version_to
             };
             println!("  {name} ({version_from} -> {version_to})");
+            if let Some(ref changelog_diff) = pkg.changelog_diff {
+                print_diff(changelog_diff, 10, colored);
+            }
         }
         println!();
     }
@@ -350,6 +418,7 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct FileInfo {
     path: String,
+    root_path: Option<String>,
     size: u64,
     file_type: FileType,
 }
@@ -362,9 +431,21 @@ enum FileType {
     Unknown,
 }
 
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct FileChange {
+    path: String,
+    root_path_from: Option<String>,
+    root_path_to: Option<String>,
+    size_from: u64,
+    size_to: u64,
+    file_type_from: FileType,
+    file_type_to: FileType,
+    file_diff: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct FileChanges {
-    modified: Vec<FileInfo>,
+    modified: Vec<FileChange>,
     added: Vec<FileInfo>,
     removed: Vec<FileInfo>,
 }
@@ -375,6 +456,8 @@ fn get_files_from(snapshot: Option<u32>, dir_path: &str) -> Result<Vec<FileInfo>
         "{}{dir_path}",
         snapshot_path.clone().unwrap_or("".to_string())
     );
+
+    println!("Reading files from {path} ...");
 
     get_files_in_directory_recursive(&path, &snapshot_path)
 }
@@ -418,6 +501,7 @@ fn get_files_in_directory_recursive(
 
         let file_info = FileInfo {
             path: full_path.to_string_lossy().to_string(),
+            root_path: root_path.clone(),
             size,
             file_type,
         };
@@ -448,10 +532,27 @@ fn file_changes(old_files: &[FileInfo], new_files: &[FileInfo]) -> FileChanges {
 
     for (name, new_file) in &new_map {
         if let Some(old_file) = old_map.get(name) {
-            if new_file.size != old_file.size
-                || new_file.file_type != old_file.file_type
-            {
-                changes.modified.push((**new_file).clone());
+            if new_file.size != old_file.size || new_file.file_type != old_file.file_type {
+                let old = fs::read_to_string(
+                    Path::new(&old_file.root_path.clone().unwrap_or("/".to_string()))
+                        .join(old_file.path.strip_prefix("/").unwrap_or(&old_file.path)),
+                )
+                .unwrap_or("".to_string());
+                let new = fs::read_to_string(
+                    Path::new(&new_file.root_path.clone().unwrap_or("/".to_string()))
+                        .join(new_file.path.strip_prefix("/").unwrap_or(&new_file.path)),
+                )
+                .unwrap_or("".to_string());
+                changes.modified.push(FileChange {
+                    path: name.to_string(),
+                    root_path_from: old_file.root_path.clone(),
+                    root_path_to: new_file.root_path.clone(),
+                    size_from: old_file.size,
+                    size_to: new_file.size,
+                    file_type_from: old_file.file_type.clone(),
+                    file_type_to: new_file.file_type.clone(),
+                    file_diff: Some(TextDiff::from_lines(&old, &new).unified_diff().to_string()),
+                });
             }
         } else {
             changes.added.push((**new_file).clone());
@@ -483,7 +584,20 @@ fn print_file_changes(file_changes: &FileChanges, colored: bool) {
             } else {
                 &f.path
             };
-            println!("  {path}");
+            let size_from = if colored {
+                f.size_from.to_string().bright_white().to_string()
+            } else {
+                f.size_from.to_string()
+            };
+            let size_to = if colored {
+                f.size_to.to_string().white().to_string()
+            } else {
+                f.size_to.to_string()
+            };
+            println!("  {path} ({size_from} -> {size_to})");
+            if let Some(ref file_diff) = f.file_diff {
+                print_diff(file_diff, 10, colored);
+            }
         }
         println!();
     }
@@ -564,7 +678,7 @@ impl From<&str> for AppError {
 }
 
 fn cmd_list(_cli: &Cli) -> Result<(), AppError> {
-    eprintln!("Command not implemented!");
+    eprintln!("Command not implemented! Use `snapper ls` for now.");
     // sudo snapper --jsonout --no-dbus ls --disable-used-space
     Ok(())
 }
@@ -586,8 +700,8 @@ fn cmd_diff(cli: &Cli) -> Result<(), AppError> {
     let mut etc_changes: Option<FileChanges> = None;
 
     if cli.packages || !cli.etc {
-        let old_packages = get_packages_from(cli.old_snapshot)?;
-        let new_packages = get_packages_from(cli.new_snapshot)?;
+        let old_packages = get_packages_from(cli.old_snapshot, cli.full_diff)?;
+        let new_packages = get_packages_from(cli.new_snapshot, cli.full_diff)?;
 
         pkg_changes = Some(package_changes(&old_packages, &new_packages));
     }
