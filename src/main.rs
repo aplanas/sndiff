@@ -6,7 +6,6 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::str;
-use std::time::SystemTime;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
@@ -353,7 +352,6 @@ struct FileInfo {
     path: String,
     size: u64,
     file_type: FileType,
-    modified: SystemTime,
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -418,13 +416,10 @@ fn get_files_in_directory_recursive(
             FileType::Unknown
         };
 
-        let modified = metadata.modified()?;
-
         let file_info = FileInfo {
             path: full_path.to_string_lossy().to_string(),
             size,
             file_type,
-            modified,
         };
 
         if entry_path.is_dir() {
@@ -455,7 +450,6 @@ fn file_changes(old_files: &[FileInfo], new_files: &[FileInfo]) -> FileChanges {
         if let Some(old_file) = old_map.get(name) {
             if new_file.size != old_file.size
                 || new_file.file_type != old_file.file_type
-                || new_file.modified.cmp(&old_file.modified) != Ordering::Equal
             {
                 changes.modified.push((**new_file).clone());
             }
