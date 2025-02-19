@@ -645,7 +645,7 @@ impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AppError::Io(err) => write!(f, "IO Error: {}", err),
-            AppError::String(err) => write!(f, "String Error: {}", err),
+            AppError::String(err) => write!(f, "Error: {}", err),
         }
     }
 }
@@ -746,12 +746,16 @@ fn cmd_diff(cli: &Cli) -> Result<(), AppError> {
     Ok(())
 }
 
-fn main() -> Result<(), AppError> {
+fn main() {
     let cli = Cli::parse();
 
-    match &cli.command {
+    let result = match &cli.command {
         Some(Commands::List) => cmd_list(&cli),
         None => cmd_diff(&cli),
+    };
+
+    if let Err(err) = result {
+        eprintln!("{}", err);
     }
 }
 
