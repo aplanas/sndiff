@@ -6,12 +6,15 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::str;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use semver::Version;
 use serde::Serialize;
 use similar::TextDiff;
+use termbg::Theme;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -55,6 +58,11 @@ enum Commands {
     /// List snapshots in the system
     List,
 }
+
+static THEME: LazyLock<Theme> = LazyLock::new(|| {
+    let timeout = Duration::from_millis(100);
+    termbg::theme(timeout).unwrap_or(Theme::Light)
+});
 
 fn check_directory_exists_and_readable(dir_path: &str) -> Result<(), String> {
     let path = Path::new(dir_path);
@@ -326,12 +334,18 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.name
             };
             let version_from = if colored {
-                &pkg.version_from.white().to_string()
+                match &*THEME {
+                    Theme::Dark => &pkg.version_from.white().to_string(),
+                    Theme::Light => &pkg.version_from.bright_black().to_string(),
+                }
             } else {
                 &pkg.version_from
             };
             let version_to = if colored {
-                &pkg.version_to.cyan().to_string()
+                match &*THEME {
+                    Theme::Dark => &pkg.version_to.bright_white().to_string(),
+                    Theme::Light => &pkg.version_to.black().to_string(),
+                }
             } else {
                 &pkg.version_to
             };
@@ -355,12 +369,18 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.name
             };
             let version_from = if colored {
-                &pkg.version_from.cyan().to_string()
+                match &*THEME {
+                    Theme::Dark => &pkg.version_from.bright_white().to_string(),
+                    Theme::Light => &pkg.version_from.black().to_string(),
+                }
             } else {
                 &pkg.version_from
             };
             let version_to = if colored {
-                &pkg.version_to.white().to_string()
+                match &*THEME {
+                    Theme::Dark => &pkg.version_to.white().to_string(),
+                    Theme::Light => &pkg.version_to.bright_black().to_string(),
+                }
             } else {
                 &pkg.version_to
             };
@@ -384,7 +404,10 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.name
             };
             let version = if colored {
-                &pkg.version.white().to_string()
+                match &*THEME {
+                    Theme::Dark => &pkg.version.white().to_string(),
+                    Theme::Light => &pkg.version.bright_black().to_string(),
+                }
             } else {
                 &pkg.version
             };
@@ -405,7 +428,10 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
                 &pkg.name
             };
             let version = if colored {
-                &pkg.version.white().to_string()
+                match &*THEME {
+                    Theme::Dark => &pkg.version.white().to_string(),
+                    Theme::Light => &pkg.version.bright_black().to_string(),
+                }
             } else {
                 &pkg.version
             };
@@ -585,12 +611,18 @@ fn print_file_changes(file_changes: &FileChanges, colored: bool) {
                 &f.path
             };
             let size_from = if colored {
-                f.size_from.to_string().white().to_string()
+                match &*THEME {
+                    Theme::Dark => f.size_from.to_string().white().to_string(),
+                    Theme::Light => f.size_from.to_string().bright_black().to_string(),
+                }
             } else {
                 f.size_from.to_string()
             };
             let size_to = if colored {
-                f.size_to.to_string().cyan().to_string()
+                match &*THEME {
+                    Theme::Dark => f.size_to.to_string().bright_white().to_string(),
+                    Theme::Light => f.size_to.to_string().black().to_string(),
+                }
             } else {
                 f.size_to.to_string()
             };
