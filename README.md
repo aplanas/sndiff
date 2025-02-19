@@ -23,10 +23,10 @@ information than before.
 
 `sndiff --etc 3 4`: Only compares `/etc` files.
 
-`sndiff --full-diff 3 4`: Shows `diff -u` (10 lines max) of changelog
+`sndiff --diff 3 4`: Shows `diff -u` (10 lines max) of changelog
 for updated or downgraded packages, and changed files from `/etc`.
 
-`sndiff --full-diff --json 3 4`: Generate JSON output, this time
+`sndiff --diff --json 3 4`: Generate JSON output, this time
 includes the full differences.
 
 `sndiff --no-colors 3 4`  -- No colorized output

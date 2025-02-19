@@ -36,7 +36,7 @@ struct Cli {
 
     /// Include diff output for changes
     #[arg(long, short)]
-    full_diff: bool,
+    diff: bool,
 
     /// Short and compact summary of changes
     #[arg(long, short)]
@@ -877,8 +877,8 @@ fn cmd_diff(cli: &Cli) -> Result<(), AppError> {
     let mut etc_changes: Option<FileChanges> = None;
 
     if cli.packages || !cli.etc {
-        let old_packages = get_packages_from(cli.old_snapshot, cli.full_diff)?;
-        let new_packages = get_packages_from(cli.new_snapshot, cli.full_diff)?;
+        let old_packages = get_packages_from(cli.old_snapshot, cli.diff)?;
+        let new_packages = get_packages_from(cli.new_snapshot, cli.diff)?;
 
         pkg_changes = Some(package_changes(&old_packages, &new_packages));
     }
