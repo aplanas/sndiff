@@ -16,6 +16,8 @@ changed, added and removed files in `/etc`.
 `sndiff 3 4`: Compare snapshots 3 (old) and 4 (new), showing the same
 information than before.
 
+`sndiff --short 3 4`: Present the information in a compact way.
+
 `sndiff --packages 3 4`: Only compares packages from snapshots 3 and
 4.
 

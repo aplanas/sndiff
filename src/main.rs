@@ -15,6 +15,7 @@ use semver::Version;
 use serde::Serialize;
 use similar::TextDiff;
 use termbg::Theme;
+use textwrap::{Options, WordSplitter, fill};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -36,6 +37,10 @@ struct Cli {
     /// Include diff output for changes
     #[arg(long, short)]
     full_diff: bool,
+
+    /// Short and compact summary of changes
+    #[arg(long, short)]
+    short: bool,
 
     /// JSON output
     #[arg(long, short)]
@@ -321,37 +326,57 @@ fn print_diff(diff: &str, max_lines: usize, colored: bool) {
     }
 }
 
-fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
+fn print_package_changes(package_changes: &PackageChanges, short: bool, colored: bool) {
     if !package_changes.updated.is_empty() {
         println!(
             "The following {} packages were upgraded:",
             package_changes.updated.len()
         );
-        for pkg in &package_changes.updated {
-            let name = if colored {
-                &pkg.name.green().to_string()
-            } else {
-                &pkg.name
-            };
-            let version_from = if colored {
-                match &*THEME {
-                    Theme::Dark => &pkg.version_from.white().to_string(),
-                    Theme::Light => &pkg.version_from.bright_black().to_string(),
+        if short {
+            let names = package_changes
+                .updated
+                .iter()
+                .map(|pkg| {
+                    if colored {
+                        pkg.name.green().to_string()
+                    } else {
+                        pkg.name.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let options = Options::with_termwidth()
+                .word_splitter(WordSplitter::NoHyphenation)
+                .initial_indent("  ")
+                .subsequent_indent("  ");
+            println!("{}", fill(&names, &options));
+        } else {
+            for pkg in &package_changes.updated {
+                let name = if colored {
+                    &pkg.name.green().to_string()
+                } else {
+                    &pkg.name
+                };
+                let version_from = if colored {
+                    match &*THEME {
+                        Theme::Dark => &pkg.version_from.white().to_string(),
+                        Theme::Light => &pkg.version_from.bright_black().to_string(),
+                    }
+                } else {
+                    &pkg.version_from
+                };
+                let version_to = if colored {
+                    match &*THEME {
+                        Theme::Dark => &pkg.version_to.bright_white().to_string(),
+                        Theme::Light => &pkg.version_to.black().to_string(),
+                    }
+                } else {
+                    &pkg.version_to
+                };
+                println!("  {name} ({version_from} -> {version_to})");
+                if let Some(ref changelog_diff) = pkg.changelog_diff {
+                    print_diff(changelog_diff, 10, colored);
                 }
-            } else {
-                &pkg.version_from
-            };
-            let version_to = if colored {
-                match &*THEME {
-                    Theme::Dark => &pkg.version_to.bright_white().to_string(),
-                    Theme::Light => &pkg.version_to.black().to_string(),
-                }
-            } else {
-                &pkg.version_to
-            };
-            println!("  {name} ({version_from} -> {version_to})");
-            if let Some(ref changelog_diff) = pkg.changelog_diff {
-                print_diff(changelog_diff, 10, colored);
             }
         }
         println!();
@@ -362,31 +387,51 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
             "The following {} packages were downgraded:",
             package_changes.downgraded.len()
         );
-        for pkg in &package_changes.downgraded {
-            let name = if colored {
-                &pkg.name.yellow().to_string()
-            } else {
-                &pkg.name
-            };
-            let version_from = if colored {
-                match &*THEME {
-                    Theme::Dark => &pkg.version_from.bright_white().to_string(),
-                    Theme::Light => &pkg.version_from.black().to_string(),
+        if short {
+            let names = package_changes
+                .downgraded
+                .iter()
+                .map(|pkg| {
+                    if colored {
+                        pkg.name.yellow().to_string()
+                    } else {
+                        pkg.name.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let options = Options::with_termwidth()
+                .word_splitter(WordSplitter::NoHyphenation)
+                .initial_indent("  ")
+                .subsequent_indent("  ");
+            println!("{}", fill(&names, &options));
+        } else {
+            for pkg in &package_changes.downgraded {
+                let name = if colored {
+                    &pkg.name.yellow().to_string()
+                } else {
+                    &pkg.name
+                };
+                let version_from = if colored {
+                    match &*THEME {
+                        Theme::Dark => &pkg.version_from.bright_white().to_string(),
+                        Theme::Light => &pkg.version_from.black().to_string(),
+                    }
+                } else {
+                    &pkg.version_from
+                };
+                let version_to = if colored {
+                    match &*THEME {
+                        Theme::Dark => &pkg.version_to.white().to_string(),
+                        Theme::Light => &pkg.version_to.bright_black().to_string(),
+                    }
+                } else {
+                    &pkg.version_to
+                };
+                println!("  {name} ({version_from} -> {version_to})");
+                if let Some(ref changelog_diff) = pkg.changelog_diff {
+                    print_diff(changelog_diff, 10, colored);
                 }
-            } else {
-                &pkg.version_from
-            };
-            let version_to = if colored {
-                match &*THEME {
-                    Theme::Dark => &pkg.version_to.white().to_string(),
-                    Theme::Light => &pkg.version_to.bright_black().to_string(),
-                }
-            } else {
-                &pkg.version_to
-            };
-            println!("  {name} ({version_from} -> {version_to})");
-            if let Some(ref changelog_diff) = pkg.changelog_diff {
-                print_diff(changelog_diff, 10, colored);
             }
         }
         println!();
@@ -397,21 +442,41 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
             "The following {} NEW packages were installed:",
             package_changes.added.len()
         );
-        for pkg in &package_changes.added {
-            let name = if colored {
-                &pkg.name.blue().to_string()
-            } else {
-                &pkg.name
-            };
-            let version = if colored {
-                match &*THEME {
-                    Theme::Dark => &pkg.version.white().to_string(),
-                    Theme::Light => &pkg.version.bright_black().to_string(),
-                }
-            } else {
-                &pkg.version
-            };
-            println!("  {name} ({version})");
+        if short {
+            let names = package_changes
+                .added
+                .iter()
+                .map(|pkg| {
+                    if colored {
+                        pkg.name.blue().to_string()
+                    } else {
+                        pkg.name.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let options = Options::with_termwidth()
+                .word_splitter(WordSplitter::NoHyphenation)
+                .initial_indent("  ")
+                .subsequent_indent("  ");
+            println!("{}", fill(&names, &options));
+        } else {
+            for pkg in &package_changes.added {
+                let name = if colored {
+                    &pkg.name.blue().to_string()
+                } else {
+                    &pkg.name
+                };
+                let version = if colored {
+                    match &*THEME {
+                        Theme::Dark => &pkg.version.white().to_string(),
+                        Theme::Light => &pkg.version.bright_black().to_string(),
+                    }
+                } else {
+                    &pkg.version
+                };
+                println!("  {name} ({version})");
+            }
         }
         println!();
     }
@@ -421,21 +486,41 @@ fn print_package_changes(package_changes: &PackageChanges, colored: bool) {
             "The following {} packages were REMOVED:",
             package_changes.removed.len()
         );
-        for pkg in &package_changes.removed {
-            let name = if colored {
-                &pkg.name.red().to_string()
-            } else {
-                &pkg.name
-            };
-            let version = if colored {
-                match &*THEME {
-                    Theme::Dark => &pkg.version.white().to_string(),
-                    Theme::Light => &pkg.version.bright_black().to_string(),
-                }
-            } else {
-                &pkg.version
-            };
-            println!("  {name} ({version})");
+        if short {
+            let names = package_changes
+                .removed
+                .iter()
+                .map(|pkg| {
+                    if colored {
+                        pkg.name.red().to_string()
+                    } else {
+                        pkg.name.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let options = Options::with_termwidth()
+                .word_splitter(WordSplitter::NoHyphenation)
+                .initial_indent("  ")
+                .subsequent_indent("  ");
+            println!("{}", fill(&names, &options));
+        } else {
+            for pkg in &package_changes.removed {
+                let name = if colored {
+                    &pkg.name.red().to_string()
+                } else {
+                    &pkg.name
+                };
+                let version = if colored {
+                    match &*THEME {
+                        Theme::Dark => &pkg.version.white().to_string(),
+                        Theme::Light => &pkg.version.bright_black().to_string(),
+                    }
+                } else {
+                    &pkg.version
+                };
+                println!("  {name} ({version})");
+            }
         }
         println!();
     }
@@ -598,39 +683,59 @@ fn file_changes(old_files: &[FileInfo], new_files: &[FileInfo]) -> FileChanges {
     changes
 }
 
-fn print_file_changes(file_changes: &FileChanges, colored: bool) {
+fn print_file_changes(file_changes: &FileChanges, short: bool, colored: bool) {
     if !file_changes.modified.is_empty() {
         println!(
             "The following {} file were modified:",
             file_changes.modified.len()
         );
-        for f in &file_changes.modified {
-            let path = if colored {
-                &f.path.green().to_string()
-            } else {
-                &f.path
-            };
-            let size_from = if colored {
-                match &*THEME {
-                    Theme::Dark => f.size_from.to_string().white().to_string(),
-                    Theme::Light => f.size_from.to_string().bright_black().to_string(),
-                }
-            } else {
-                f.size_from.to_string()
-            };
-            let size_to = if colored {
-                match &*THEME {
-                    Theme::Dark => f.size_to.to_string().bright_white().to_string(),
-                    Theme::Light => f.size_to.to_string().black().to_string(),
-                }
-            } else {
-                f.size_to.to_string()
-            };
-            println!("  {path} ({size_from} -> {size_to})");
-            if let Some(ref file_diff) = f.file_diff {
-                print_diff(file_diff, 10, colored);
+        if short {
+            let paths = file_changes
+                .modified
+                .iter()
+                .map(|f| {
+                    if colored {
+                        f.path.green().to_string()
+                    } else {
+                        f.path.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let options = Options::with_termwidth()
+                .word_splitter(WordSplitter::NoHyphenation)
+                .initial_indent("  ")
+                .subsequent_indent("  ");
+            println!("{}", fill(&paths, &options));
+        } else {
+            for f in &file_changes.modified {
+		let path = if colored {
+                    &f.path.green().to_string()
+		} else {
+                    &f.path
+		};
+		let size_from = if colored {
+                    match &*THEME {
+			Theme::Dark => f.size_from.to_string().white().to_string(),
+			Theme::Light => f.size_from.to_string().bright_black().to_string(),
+                    }
+		} else {
+                    f.size_from.to_string()
+		};
+		let size_to = if colored {
+                    match &*THEME {
+			Theme::Dark => f.size_to.to_string().bright_white().to_string(),
+			Theme::Light => f.size_to.to_string().black().to_string(),
+                    }
+		} else {
+                    f.size_to.to_string()
+		};
+		println!("  {path} ({size_from} -> {size_to})");
+		if let Some(ref file_diff) = f.file_diff {
+                    print_diff(file_diff, 10, colored);
+		}
             }
-        }
+	}
         println!();
     }
 
@@ -639,14 +744,34 @@ fn print_file_changes(file_changes: &FileChanges, colored: bool) {
             "The following {} NEW files were created:",
             file_changes.added.len()
         );
-        for f in &file_changes.added {
-            let path = if colored {
-                &f.path.blue().to_string()
-            } else {
-                &f.path
-            };
-            println!("  {path}");
-        }
+        if short {
+            let paths = file_changes
+                .added
+                .iter()
+                .map(|f| {
+                    if colored {
+                        f.path.blue().to_string()
+                    } else {
+                        f.path.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let options = Options::with_termwidth()
+                .word_splitter(WordSplitter::NoHyphenation)
+                .initial_indent("  ")
+                .subsequent_indent("  ");
+            println!("{}", fill(&paths, &options));
+        } else {
+            for f in &file_changes.added {
+		let path = if colored {
+                    &f.path.blue().to_string()
+		} else {
+                    &f.path
+		};
+		println!("  {path}");
+            }
+	}
         println!();
     }
 
@@ -655,14 +780,34 @@ fn print_file_changes(file_changes: &FileChanges, colored: bool) {
             "The following {} files were REMOVED:",
             file_changes.removed.len()
         );
-        for f in &file_changes.removed {
-            let path = if colored {
-                &f.path.red().to_string()
-            } else {
-                &f.path
-            };
-            println!("  {path}");
-        }
+	if short {
+            let paths = file_changes
+                .removed
+                .iter()
+                .map(|f| {
+                    if colored {
+                        f.path.red().to_string()
+                    } else {
+                        f.path.to_string()
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join(" ");
+            let options = Options::with_termwidth()
+                .word_splitter(WordSplitter::NoHyphenation)
+                .initial_indent("  ")
+                .subsequent_indent("  ");
+            println!("{}", fill(&paths, &options));
+        } else {
+            for f in &file_changes.removed {
+		let path = if colored {
+                    &f.path.red().to_string()
+		} else {
+                    &f.path
+		};
+		println!("  {path}");
+            }
+	}
         println!();
     }
 }
@@ -754,22 +899,22 @@ fn cmd_diff(cli: &Cli) -> Result<(), AppError> {
                 };
                 println!("{}", serde_json::to_string(&changes).unwrap());
             } else {
-                print_package_changes(&pkg, !cli.no_colors);
-                print_file_changes(&etc, !cli.no_colors);
+                print_package_changes(&pkg, cli.short, !cli.no_colors);
+                print_file_changes(&etc, cli.short, !cli.no_colors);
             }
         }
         (Some(pkg), None) => {
             if cli.json {
                 println!("{}", serde_json::to_string(&pkg).unwrap());
             } else {
-                print_package_changes(&pkg, !cli.no_colors);
+                print_package_changes(&pkg, cli.short, !cli.no_colors);
             }
         }
         (None, Some(etc)) => {
             if cli.json {
                 println!("{}", serde_json::to_string(&etc).unwrap());
             } else {
-                print_file_changes(&etc, !cli.no_colors);
+                print_file_changes(&etc, cli.short, !cli.no_colors);
             }
         }
         (None, None) => {}
