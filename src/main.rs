@@ -126,6 +126,7 @@ fn get_packages_from(snapshot: Option<u32>, changelog: bool) -> Result<Vec<Packa
         "/usr/lib/sysimage/rpm".to_string()
     };
 
+    check_directory_exists_and_readable(&dbpath)?;
     println!("Reading packages from {dbpath} ...");
 
     let query_format = if changelog {
