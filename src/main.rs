@@ -9,10 +9,11 @@ use std::str;
 use std::sync::LazyLock;
 use std::time::Duration;
 
+use chrono::{DateTime, NaiveDateTime, Utc};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use semver::Version;
-use serde::Serialize;
+use serde::{Deserialize, Serialize, de};
 use similar::TextDiff;
 use termbg::Theme;
 use textwrap::{Options, WordSplitter, fill};
@@ -49,10 +50,6 @@ struct Cli {
     /// Disable colored output
     #[arg(long, short)]
     no_colors: bool,
-
-    /// Turn debugging information on
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    debug: u8,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -710,33 +707,33 @@ fn print_file_changes(file_changes: &FileChanges, short: bool, colored: bool) {
             println!("{}", fill(&paths, &options));
         } else {
             for f in &file_changes.modified {
-		let path = if colored {
+                let path = if colored {
                     &f.path.green().to_string()
-		} else {
+                } else {
                     &f.path
-		};
-		let size_from = if colored {
+                };
+                let size_from = if colored {
                     match &*THEME {
-			Theme::Dark => f.size_from.to_string().white().to_string(),
-			Theme::Light => f.size_from.to_string().bright_black().to_string(),
+                        Theme::Dark => f.size_from.to_string().white().to_string(),
+                        Theme::Light => f.size_from.to_string().bright_black().to_string(),
                     }
-		} else {
+                } else {
                     f.size_from.to_string()
-		};
-		let size_to = if colored {
+                };
+                let size_to = if colored {
                     match &*THEME {
-			Theme::Dark => f.size_to.to_string().bright_white().to_string(),
-			Theme::Light => f.size_to.to_string().black().to_string(),
+                        Theme::Dark => f.size_to.to_string().bright_white().to_string(),
+                        Theme::Light => f.size_to.to_string().black().to_string(),
                     }
-		} else {
+                } else {
                     f.size_to.to_string()
-		};
-		println!("  {path} ({size_from} -> {size_to})");
-		if let Some(ref file_diff) = f.file_diff {
+                };
+                println!("  {path} ({size_from} -> {size_to})");
+                if let Some(ref file_diff) = f.file_diff {
                     print_diff(file_diff, 10, colored);
-		}
+                }
             }
-	}
+        }
         println!();
     }
 
@@ -765,14 +762,14 @@ fn print_file_changes(file_changes: &FileChanges, short: bool, colored: bool) {
             println!("{}", fill(&paths, &options));
         } else {
             for f in &file_changes.added {
-		let path = if colored {
+                let path = if colored {
                     &f.path.blue().to_string()
-		} else {
+                } else {
                     &f.path
-		};
-		println!("  {path}");
+                };
+                println!("  {path}");
             }
-	}
+        }
         println!();
     }
 
@@ -781,7 +778,7 @@ fn print_file_changes(file_changes: &FileChanges, short: bool, colored: bool) {
             "The following {} files were REMOVED:",
             file_changes.removed.len()
         );
-	if short {
+        if short {
             let paths = file_changes
                 .removed
                 .iter()
@@ -801,14 +798,14 @@ fn print_file_changes(file_changes: &FileChanges, short: bool, colored: bool) {
             println!("{}", fill(&paths, &options));
         } else {
             for f in &file_changes.removed {
-		let path = if colored {
+                let path = if colored {
                     &f.path.red().to_string()
-		} else {
+                } else {
                     &f.path
-		};
-		println!("  {path}");
+                };
+                println!("  {path}");
             }
-	}
+        }
         println!();
     }
 }
@@ -855,9 +852,137 @@ impl From<&str> for AppError {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SnapshotType {
+    Single,
+    Pre,
+    Post,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SnapshotCleanup {
+    Number,
+    Timeline,
+    #[serde(rename = "empty-pre-post")]
+    EmptyPrePost,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotUserData {
+    #[serde(deserialize_with = "deserialize_bool_from_str")]
+    important: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct Snapshot {
+    subvolume: String,
+    number: usize,
+    default: bool,
+    active: bool,
+    #[serde(rename = "type")]
+    type_: SnapshotType,
+    #[serde(rename = "pre-number")]
+    pre_number: Option<usize>,
+    #[serde(deserialize_with = "deserialize_datetime_from_str")]
+    date: Option<DateTime<Utc>>,
+    user: String,
+    #[serde(deserialize_with = "deserialize_cleanup_from_str")]
+    cleanup: Option<SnapshotCleanup>,
+    description: String,
+    userdata: Option<SnapshotUserData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Snapshots {
+    root: Vec<Snapshot>,
+}
+
+fn deserialize_bool_from_str<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let s = de::Deserialize::deserialize(deserializer)?;
+    match s {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        _ => Err(de::Error::unknown_variant(s, &["yes", "no"])),
+    }
+}
+
+fn deserialize_datetime_from_str<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let s = String::deserialize(deserializer)?;
+
+    if s.is_empty() {
+        return Ok(None);
+    }
+
+    let dt =
+        NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S").map_err(serde::de::Error::custom)?;
+    Ok(Some(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)))
+}
+
+fn deserialize_cleanup_from_str<'de, D>(
+    deserializer: D,
+) -> Result<Option<SnapshotCleanup>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let s = SnapshotCleanup::deserialize(deserializer);
+    match s {
+        Ok(v) => Ok(Some(v)),
+        Err(_) => Ok(None),
+    }
+}
+
+fn get_snapshots() -> Result<Snapshots, AppError> {
+    let output = Command::new("snapper")
+        .arg("--jsonout")
+        .arg("--no-dbus")
+        .arg("ls")
+        .arg("--disable-used-space")
+        .output()
+        .map_err(|e| format!("Failed to execute snapper: {}", e))?;
+
+    if !output.status.success() {
+        eprintln!("stdout: {}", str::from_utf8(&output.stdout).unwrap());
+        eprintln!("stderr: {}", str::from_utf8(&output.stderr).unwrap());
+        return Err(format!("snapper failed with status: {}", output.status).into());
+    }
+
+    let stdout =
+        str::from_utf8(&output.stdout).map_err(|e| format!("Invalid UTF-8 output: {}", e))?;
+
+    let snapshots: Snapshots = serde_json::from_str(stdout).expect("Failed to parse JSON");
+    Ok(snapshots)
+}
+
 fn cmd_list(_cli: &Cli) -> Result<(), AppError> {
-    eprintln!("Command not implemented! Use `snapper ls` for now.");
-    // sudo snapper --jsonout --no-dbus ls --disable-used-space
+    let snapshots = get_snapshots()?;
+    for snapshot in &snapshots.root {
+        println!(
+            "{:04}{} {}  {}",
+            snapshot.number,
+            if snapshot.default && snapshot.active {
+                '*'
+            } else if snapshot.default {
+                '-'
+            } else if snapshot.active {
+                '+'
+            } else {
+                ' '
+            },
+            match snapshot.date {
+                Some(d) => format!("{}", d),
+                None => " ".repeat("xxxx-xx-xx xx:xx:xx xxx".len()),
+            },
+            snapshot.description
+        );
+    }
     Ok(())
 }
 
