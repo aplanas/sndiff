@@ -9,11 +9,11 @@ use std::str;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use semver::Version;
-use serde::{Deserialize, Serialize, de};
+use serde::{Deserialize, Serialize};
 use similar::TextDiff;
 use termbg::Theme;
 use textwrap::{Options, WordSplitter, fill};
@@ -21,10 +21,11 @@ use textwrap::{Options, WordSplitter, fill};
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Snapshot to compare with
+    /// Snapshot to compare with.  If missing will be autodetected
     old_snapshot: Option<u32>,
 
-    /// Optional reference snapshot.  If missing use the current one
+    /// Optional reference snapshot.  Usually the current one.  If
+    /// missing will be autodetected
     new_snapshot: Option<u32>,
 
     /// Report only changes in packages
@@ -50,6 +51,10 @@ struct Cli {
     /// Disable colored output
     #[arg(long, short)]
     no_colors: bool,
+
+    /// Verbose output
+    #[arg(long, short)]
+    verbose: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -116,15 +121,17 @@ struct PackageChanges {
     removed: Vec<Package>,
 }
 
-fn get_packages_from(snapshot: Option<u32>, changelog: bool) -> Result<Vec<Package>, String> {
-    let dbpath = if let Some(id) = snapshot {
-        format!("/.snapshots/{id}/snapshot/usr/lib/sysimage/rpm")
-    } else {
-        "/usr/lib/sysimage/rpm".to_string()
-    };
+fn get_packages_from(
+    snapshot: u32,
+    changelog: bool,
+    verbose: bool,
+) -> Result<Vec<Package>, String> {
+    let dbpath = format!("/.snapshots/{snapshot}/snapshot/usr/lib/sysimage/rpm");
 
     check_directory_exists_and_readable(&dbpath)?;
-    println!("Reading packages from {dbpath} ...");
+    if verbose {
+        println!("Reading packages from {dbpath} ...");
+    }
 
     let query_format = if changelog {
         "%{NAME}\n%{VERSION}-%{RELEASE}\n---BEGIN CHANGELOG\n[* %{CHANGELOGTIME:date} %{CHANGELOGNAME}\n%{CHANGELOGTEXT}\n\n]---END CHANGELOG\n"
@@ -527,7 +534,7 @@ fn print_package_changes(package_changes: &PackageChanges, short: bool, colored:
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct FileInfo {
     path: String,
-    root_path: Option<String>,
+    root_path: String,
     size: u64,
     file_type: FileType,
 }
@@ -543,8 +550,8 @@ enum FileType {
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct FileChange {
     path: String,
-    root_path_from: Option<String>,
-    root_path_to: Option<String>,
+    root_path_from: String,
+    root_path_to: String,
     size_from: u64,
     size_to: u64,
     file_type_from: FileType,
@@ -559,21 +566,24 @@ struct FileChanges {
     removed: Vec<FileInfo>,
 }
 
-fn get_files_from(snapshot: Option<u32>, dir_path: &str) -> Result<Vec<FileInfo>, std::io::Error> {
-    let snapshot_path = snapshot.map(|id| format!("/.snapshots/{id}/snapshot"));
-    let path = format!(
-        "{}{dir_path}",
-        snapshot_path.clone().unwrap_or("".to_string())
-    );
+fn get_files_from(
+    snapshot: u32,
+    dir_path: &str,
+    verbose: bool,
+) -> Result<Vec<FileInfo>, std::io::Error> {
+    let snapshot_path = format!("/.snapshots/{snapshot}/snapshot");
+    let path = format!("{snapshot_path}{dir_path}");
 
-    println!("Reading files from {path} ...");
+    if verbose {
+        println!("Reading files from {path} ...");
+    }
 
     get_files_in_directory_recursive(&path, &snapshot_path)
 }
 
 fn get_files_in_directory_recursive(
     dir_path: &str,
-    root_path: &Option<String>,
+    root_path: &str,
 ) -> Result<Vec<FileInfo>, std::io::Error> {
     let path = Path::new(dir_path);
 
@@ -591,9 +601,7 @@ fn get_files_in_directory_recursive(
         let entry_path = entry.path();
         let metadata = fs::symlink_metadata(&entry_path)?;
 
-        let relative_path = entry_path
-            .strip_prefix(root_path.as_ref().map_or("", |v| v))
-            .unwrap_or(&entry_path);
+        let relative_path = entry_path.strip_prefix(root_path).unwrap_or(&entry_path);
         let full_path = Path::new("/").join(relative_path);
 
         let size = metadata.len();
@@ -610,7 +618,7 @@ fn get_files_in_directory_recursive(
 
         let file_info = FileInfo {
             path: full_path.to_string_lossy().to_string(),
-            root_path: root_path.clone(),
+            root_path: root_path.to_string(),
             size,
             file_type,
         };
@@ -643,12 +651,12 @@ fn file_changes(old_files: &[FileInfo], new_files: &[FileInfo]) -> FileChanges {
         if let Some(old_file) = old_map.get(name) {
             if new_file.size != old_file.size || new_file.file_type != old_file.file_type {
                 let old = fs::read_to_string(
-                    Path::new(&old_file.root_path.clone().unwrap_or("/".to_string()))
+                    Path::new(&old_file.root_path)
                         .join(old_file.path.strip_prefix("/").unwrap_or(&old_file.path)),
                 )
                 .unwrap_or("".to_string());
                 let new = fs::read_to_string(
-                    Path::new(&new_file.root_path.clone().unwrap_or("/".to_string()))
+                    Path::new(&new_file.root_path)
                         .join(new_file.path.strip_prefix("/").unwrap_or(&new_file.path)),
                 )
                 .unwrap_or("".to_string());
@@ -852,7 +860,7 @@ impl From<&str> for AppError {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 enum SnapshotType {
     Single,
@@ -860,82 +868,62 @@ enum SnapshotType {
     Post,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
-enum SnapshotCleanup {
-    Number,
-    Timeline,
-    #[serde(rename = "empty-pre-post")]
-    EmptyPrePost,
+enum SnapshotCmp {
+    Old,
+    New,
 }
 
-#[derive(Debug, Deserialize)]
-struct SnapshotUserData {
-    #[serde(deserialize_with = "deserialize_bool_from_str")]
-    important: bool,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Snapshot {
-    subvolume: String,
-    number: usize,
+    number: u32,
     default: bool,
     active: bool,
     #[serde(rename = "type")]
     type_: SnapshotType,
     #[serde(rename = "pre-number")]
-    pre_number: Option<usize>,
-    #[serde(deserialize_with = "deserialize_datetime_from_str")]
+    pre_number: Option<u32>,
+    #[serde(with = "datetime_str")]
     date: Option<DateTime<Utc>>,
-    user: String,
-    #[serde(deserialize_with = "deserialize_cleanup_from_str")]
-    cleanup: Option<SnapshotCleanup>,
     description: String,
-    userdata: Option<SnapshotUserData>,
+    cmp: Option<SnapshotCmp>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct Snapshots {
     root: Vec<Snapshot>,
 }
 
-fn deserialize_bool_from_str<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    let s = de::Deserialize::deserialize(deserializer)?;
-    match s {
-        "yes" => Ok(true),
-        "no" => Ok(false),
-        _ => Err(de::Error::unknown_variant(s, &["yes", "no"])),
-    }
-}
+mod datetime_str {
+    use chrono::{DateTime, NaiveDateTime, Utc};
+    use serde::{self, Deserialize, Deserializer, Serializer};
 
-fn deserialize_datetime_from_str<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
+    const FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
-    if s.is_empty() {
-        return Ok(None);
+    pub fn serialize<S>(date: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s = match date {
+            Some(d) => format!("{}", d.format(FORMAT)),
+            None => "".to_string(),
+        };
+        serializer.serialize_str(&s)
     }
 
-    let dt =
-        NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S").map_err(serde::de::Error::custom)?;
-    Ok(Some(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)))
-}
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<DateTime<Utc>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
 
-fn deserialize_cleanup_from_str<'de, D>(
-    deserializer: D,
-) -> Result<Option<SnapshotCleanup>, D::Error>
-where
-    D: de::Deserializer<'de>,
-{
-    let s = SnapshotCleanup::deserialize(deserializer);
-    match s {
-        Ok(v) => Ok(Some(v)),
-        Err(_) => Ok(None),
+        if s.is_empty() {
+            return Ok(None);
+        }
+
+        let dt = NaiveDateTime::parse_from_str(&s, FORMAT).map_err(serde::de::Error::custom)?;
+        Ok(Some(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc)))
     }
 }
 
@@ -961,11 +949,24 @@ fn get_snapshots() -> Result<Snapshots, AppError> {
     Ok(snapshots)
 }
 
-fn cmd_list(_cli: &Cli) -> Result<(), AppError> {
-    let snapshots = get_snapshots()?;
+fn print_snapshots(snapshots: &Snapshots) {
+    let date_len = "xxxx-xx-xx xx:xx:xx xxx".len();
+    println!(
+        "{:>5} | Cmp | {:6} | {:>5} | {:date_len$} | Description",
+        "#", "Type", "Pre #", "Date"
+    );
+    println!(
+        "------+-----+--------+-------+-{}-+-{}",
+        "-".repeat(date_len),
+        "-".repeat(date_len)
+    );
     for snapshot in &snapshots.root {
+        if snapshot.number == 0 {
+            continue;
+        }
+
         println!(
-            "{:04}{} {}  {}",
+            "{:5}{}| {:3} | {:6} | {:>5} | {} | {}",
             snapshot.number,
             if snapshot.default && snapshot.active {
                 '*'
@@ -976,12 +977,46 @@ fn cmd_list(_cli: &Cli) -> Result<(), AppError> {
             } else {
                 ' '
             },
+            match snapshot.cmp {
+                Some(SnapshotCmp::Old) => "old",
+                Some(SnapshotCmp::New) => "new",
+                None => "",
+            },
+            match snapshot.type_ {
+                SnapshotType::Single => "single",
+                SnapshotType::Pre => "pre",
+                SnapshotType::Post => "post",
+            },
+            match snapshot.pre_number {
+                Some(n) => n.to_string(),
+                None => "".to_string(),
+            },
             match snapshot.date {
-                Some(d) => format!("{}", d),
+                Some(d) => d.to_string(),
                 None => " ".repeat("xxxx-xx-xx xx:xx:xx xxx".len()),
             },
             snapshot.description
         );
+    }
+}
+
+fn cmd_list(cli: &Cli) -> Result<(), AppError> {
+    let mut snapshots = get_snapshots()?;
+
+    let (old_snapshot, new_snapshot) = get_old_new_snapshots(cli)?;
+
+    for s in &mut snapshots.root {
+        if s.number == old_snapshot {
+            s.cmp = Some(SnapshotCmp::Old);
+        } else if s.number == new_snapshot {
+            s.cmp = Some(SnapshotCmp::New);
+        }
+    }
+
+    if cli.json {
+        println!("{}", serde_json::to_string(&snapshots).unwrap());
+    } else {
+        print_snapshots(&snapshots);
     }
     Ok(())
 }
@@ -992,10 +1027,78 @@ struct Changes {
     files: FileChanges,
 }
 
-fn cmd_diff(cli: &Cli) -> Result<(), AppError> {
-    if cli.old_snapshot.is_none() {
-        return Err("Missing old snapshot parameter".into());
+fn is_transactional() -> bool {
+    if check_directory_exists_and_readable("/.snapshots").is_err() {
+        return false;
+    }
+
+    let output = Command::new("rpm")
+        .arg("--query")
+        .arg("--quiet")
+        .arg("read-only-root-fs")
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(_) => return false,
     };
+
+    output.status.success()
+}
+
+fn get_old_new_snapshots(cli: &Cli) -> Result<(u32, u32), AppError> {
+    let microos = is_transactional();
+    let snapshots = get_snapshots()?;
+
+    let default = snapshots
+        .root
+        .iter()
+        .find(|s| s.default)
+        .map(|s| s.number)
+        .expect("No default snapshot found");
+    let active = snapshots
+        .root
+        .iter()
+        .find(|s| s.active)
+        .map(|s| s.number)
+        .expect("No active snapshot found");
+
+    let old_snapshot_default = if active != default {
+        default
+    } else if microos {
+        // Select the snapshot ID just before the default / active one
+        snapshots
+            .root
+            .iter()
+            .filter(|s| s.number < active)
+            .map(|s| s.number)
+            .next_back()
+            .unwrap_or(active)
+    } else {
+        // Select the snapshot ID of the last "pre" with ID bigger
+        // than the active one
+        snapshots
+            .root
+            .iter()
+            .filter(|s| s.type_ == SnapshotType::Pre)
+            .filter(|s| s.number > active)
+            .map(|s| s.number)
+            .next_back()
+            .unwrap_or(active)
+    };
+
+    let new_snapshot_default = active;
+
+    match (cli.old_snapshot, cli.new_snapshot) {
+        (Some(o), Some(n)) => Ok((o, n)),
+        (Some(o), None) => Ok((o, new_snapshot_default)),
+        (None, Some(n)) => Ok((old_snapshot_default, n)),
+        (None, None) => Ok((old_snapshot_default, new_snapshot_default)),
+    }
+}
+
+fn cmd_diff(cli: &Cli) -> Result<(), AppError> {
+    let (old_snapshot, new_snapshot) = get_old_new_snapshots(cli)?;
 
     check_directory_exists_and_readable("/.snapshots")?;
 
@@ -1003,15 +1106,15 @@ fn cmd_diff(cli: &Cli) -> Result<(), AppError> {
     let mut etc_changes: Option<FileChanges> = None;
 
     if cli.packages || !cli.etc {
-        let old_packages = get_packages_from(cli.old_snapshot, cli.diff)?;
-        let new_packages = get_packages_from(cli.new_snapshot, cli.diff)?;
+        let old_packages = get_packages_from(old_snapshot, cli.diff, cli.verbose)?;
+        let new_packages = get_packages_from(new_snapshot, cli.diff, cli.verbose)?;
 
         pkg_changes = Some(package_changes(&old_packages, &new_packages));
     }
 
     if cli.etc || !cli.packages {
-        let old_files = get_files_from(cli.old_snapshot, "/etc")?;
-        let new_files = get_files_from(cli.new_snapshot, "/etc")?;
+        let old_files = get_files_from(old_snapshot, "/etc", cli.verbose)?;
+        let new_files = get_files_from(new_snapshot, "/etc", cli.verbose)?;
 
         etc_changes = Some(file_changes(&old_files, &new_files));
     }
@@ -1134,7 +1237,7 @@ mod tests {
         File::create("test_dir/subdir1/file2.txt")?;
         File::create("test_dir/subdir1/subdir2/file3.txt")?;
 
-        let files = get_files_in_directory_recursive("test_dir", &None)?;
+        let files = get_files_in_directory_recursive("test_dir", "")?;
         assert_eq!(files.len(), 3);
         // assert!(files.contains(&"file1.txt".to_string()));
         // assert!(files.contains(&"file2.txt".to_string()));
@@ -1147,7 +1250,7 @@ mod tests {
 
     #[test]
     fn test_get_files_in_directory_recursive_not_a_directory() {
-        let result = get_files_in_directory_recursive("not_a_directory", &None); // Nonexistent path
+        let result = get_files_in_directory_recursive("not_a_directory", ""); // Nonexistent path
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(e.kind(), std::io::ErrorKind::NotADirectory);

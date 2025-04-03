@@ -16,6 +16,10 @@ changed, added and removed files in `/etc`.
 `sndiff 3 4`: Compare snapshots 3 (old) and 4 (new), showing the same
 information than before.
 
+`sndiff`: Compare the previous snapshot (old) with the current active
+one (new).  The previous snapshot selection depends on the kind of
+distribution (MicroOS or Tumbleweed).
+
 `sndiff --short 3 4`: Present the information in a compact way.
 
 `sndiff --packages 3 4`: Only compares packages from snapshots 3 and
@@ -29,4 +33,9 @@ for updated or downgraded packages, and changed files from `/etc`.
 `sndiff --diff --json 3 4`: Generate JSON output, this time
 includes the full differences.
 
-`sndiff --no-colors 3 4`  -- No colorized output
+`sndiff --no-colors 3 4`: No colorized output.
+
+`sndiff list`: Print a table of current snapshots.  Mark the snapshot
+selected as `old` and `new`.
+
+`sndiff --json list`: Shows the same table in JSON format.
