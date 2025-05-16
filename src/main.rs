@@ -75,11 +75,11 @@ fn check_directory_exists_and_readable(dir_path: &str) -> Result<(), String> {
     let path = Path::new(dir_path);
 
     if !path.exists() {
-        return Err(format!("Directory '{}' does not exist.", dir_path));
+        return Err(format!("Directory '{dir_path}' does not exist."));
     }
 
     if !path.is_dir() {
-        return Err(format!("'{}' is not a directory.", dir_path));
+        return Err(format!("'{dir_path}' is not a directory."));
     }
 
     match fs::read_dir(path) {
@@ -87,11 +87,10 @@ fn check_directory_exists_and_readable(dir_path: &str) -> Result<(), String> {
         Err(e) => {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
                 Err(format!(
-                    "No read permission for directory '{}': {}",
-                    dir_path, e
+                    "No read permission for directory '{dir_path}': {e}"
                 ))
             } else {
-                Err(format!("Error reading directory '{}': {}", dir_path, e))
+                Err(format!("Error reading directory '{dir_path}': {e}"))
             }
         }
     }
@@ -146,7 +145,7 @@ fn get_packages_from(
         .arg("--dbpath")
         .arg(&dbpath)
         .output()
-        .map_err(|e| format!("Failed to execute rpm: {}", e))?;
+        .map_err(|e| format!("Failed to execute rpm: {e}"))?;
 
     if !output.status.success() {
         eprintln!("stdout: {}", str::from_utf8(&output.stdout).unwrap());
@@ -155,7 +154,7 @@ fn get_packages_from(
     }
 
     let stdout =
-        str::from_utf8(&output.stdout).map_err(|e| format!("Invalid UTF-8 output: {}", e))?;
+        str::from_utf8(&output.stdout).map_err(|e| format!("Invalid UTF-8 output: {e}"))?;
 
     let mut packages: Vec<Package> = Vec::new();
     let mut lines = stdout.lines();
@@ -211,7 +210,7 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
         .map(|p| (p.name.as_str(), (p.version.as_str(), &p.changelog)))
         .collect();
 
-    for (name, (new_version, new_changelog)) in new_map.iter() {
+    for (name, (new_version, new_changelog)) in &new_map {
         if let Some((old_version, old_changelog)) = old_map.get(name) {
             let parsed_old_version = Version::parse(old_version);
             let parsed_new_version = Version::parse(new_version);
@@ -225,17 +224,17 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
                 (Ok(old), Ok(new)) => match new.cmp(&old) {
                     Ordering::Greater => {
                         changes.updated.push(PackageChange {
-                            name: name.to_string(),
-                            version_from: old_version.to_string(),
-                            version_to: new_version.to_string(),
+                            name: (*name).to_string(),
+                            version_from: (*old_version).to_string(),
+                            version_to: (*new_version).to_string(),
                             changelog_diff,
                         });
                     }
                     Ordering::Less => {
                         changes.downgraded.push(PackageChange {
-                            name: name.to_string(),
-                            version_from: old_version.to_string(),
-                            version_to: new_version.to_string(),
+                            name: (*name).to_string(),
+                            version_from: (*old_version).to_string(),
+                            version_to: (*new_version).to_string(),
                             changelog_diff,
                         });
                     }
@@ -244,27 +243,27 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
                 (Err(_), Ok(_)) => {
                     // Handle cases where the old version is not semver but new is: treat as update.
                     changes.updated.push(PackageChange {
-                        name: name.to_string(),
-                        version_from: old_version.to_string(),
-                        version_to: new_version.to_string(),
+                        name: (*name).to_string(),
+                        version_from: (*old_version).to_string(),
+                        version_to: (*new_version).to_string(),
                         changelog_diff,
                     });
                 }
                 (Ok(_), Err(_)) => {
                     // Handle cases where the new version is not semver but old is: treat as downgrade.
                     changes.downgraded.push(PackageChange {
-                        name: name.to_string(),
-                        version_from: old_version.to_string(),
-                        version_to: new_version.to_string(),
+                        name: (*name).to_string(),
+                        version_from: (*old_version).to_string(),
+                        version_to: (*new_version).to_string(),
                         changelog_diff,
                     });
                 }
                 (Err(_), Err(_)) => {
                     if new_version != old_version {
                         changes.updated.push(PackageChange {
-                            name: name.to_string(),
-                            version_from: old_version.to_string(),
-                            version_to: new_version.to_string(),
+                            name: (*name).to_string(),
+                            version_from: (*old_version).to_string(),
+                            version_to: (*new_version).to_string(),
                             changelog_diff,
                         });
                     }
@@ -273,19 +272,19 @@ fn package_changes(old_packages: &[Package], new_packages: &[Package]) -> Packag
         } else {
             // Package was added
             changes.added.push(Package {
-                name: name.to_string(),
-                version: new_version.to_string(),
+                name: (*name).to_string(),
+                version: (*new_version).to_string(),
                 changelog: (**new_changelog).clone(),
             });
         }
     }
 
     // Check for removed packages
-    for (name, (old_version, old_changelog)) in old_map.iter() {
+    for (name, (old_version, old_changelog)) in &old_map {
         if !new_map.contains_key(name) {
             changes.removed.push(Package {
-                name: name.to_string(),
-                version: old_version.to_string(),
+                name: (*name).to_string(),
+                version: (*old_version).to_string(),
                 changelog: (**old_changelog).clone(),
             });
         }
@@ -654,14 +653,14 @@ fn file_changes(old_files: &[FileInfo], new_files: &[FileInfo]) -> FileChanges {
                     Path::new(&old_file.root_path)
                         .join(old_file.path.strip_prefix("/").unwrap_or(&old_file.path)),
                 )
-                .unwrap_or("".to_string());
+                .unwrap_or_default();
                 let new = fs::read_to_string(
                     Path::new(&new_file.root_path)
                         .join(new_file.path.strip_prefix("/").unwrap_or(&new_file.path)),
                 )
-                .unwrap_or("".to_string());
+                .unwrap_or_default();
                 changes.modified.push(FileChange {
-                    path: name.to_string(),
+                    path: (*name).to_string(),
                     root_path_from: old_file.root_path.clone(),
                     root_path_to: new_file.root_path.clone(),
                     size_from: old_file.size,
@@ -827,8 +826,8 @@ enum AppError {
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AppError::Io(err) => write!(f, "IO Error: {}", err),
-            AppError::String(err) => write!(f, "Error: {}", err),
+            AppError::Io(err) => write!(f, "IO Error: {err}"),
+            AppError::String(err) => write!(f, "Error: {err}"),
         }
     }
 }
@@ -907,7 +906,7 @@ mod datetime_str {
     {
         let s = match date {
             Some(d) => format!("{}", d.format(FORMAT)),
-            None => "".to_string(),
+            None => String::new(),
         };
         serializer.serialize_str(&s)
     }
@@ -934,7 +933,7 @@ fn get_snapshots() -> Result<Snapshots, AppError> {
         .arg("ls")
         .arg("--disable-used-space")
         .output()
-        .map_err(|e| format!("Failed to execute snapper: {}", e))?;
+        .map_err(|e| format!("Failed to execute snapper: {e}"))?;
 
     if !output.status.success() {
         eprintln!("stdout: {}", str::from_utf8(&output.stdout).unwrap());
@@ -943,7 +942,7 @@ fn get_snapshots() -> Result<Snapshots, AppError> {
     }
 
     let stdout =
-        str::from_utf8(&output.stdout).map_err(|e| format!("Invalid UTF-8 output: {}", e))?;
+        str::from_utf8(&output.stdout).map_err(|e| format!("Invalid UTF-8 output: {e}"))?;
 
     let snapshots: Snapshots = serde_json::from_str(stdout).expect("Failed to parse JSON");
     Ok(snapshots)
@@ -989,7 +988,7 @@ fn print_snapshots(snapshots: &Snapshots) {
             },
             match snapshot.pre_number {
                 Some(n) => n.to_string(),
-                None => "".to_string(),
+                None => String::new(),
             },
             match snapshot.date {
                 Some(d) => d.to_string(),
@@ -1038,10 +1037,7 @@ fn is_transactional() -> bool {
         .arg("read-only-root-fs")
         .output();
 
-    let output = match output {
-        Ok(o) => o,
-        Err(_) => return false,
-    };
+    let Ok(output) = output else { return false };
 
     output.status.success()
 }
@@ -1161,7 +1157,7 @@ fn main() {
     };
 
     if let Err(err) = result {
-        eprintln!("{}", err);
+        eprintln!("{err}");
     }
 }
 
